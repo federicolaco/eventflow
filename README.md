@@ -56,3 +56,14 @@ La separación en microservicios permite escalar cada componente de forma indepe
 - Facilita la portabilidad del proyecto entre equipos y entornos (desarrollo, pruebas, producción).
 
 ---
+
+## Instalación
+
+**Pre-condiciones**
+
+- Docker en ejecución
+- Comenzar parado en la base del proyecto
+
+En la base del proyecto, ejecutar en la consola
+
+`docker compose up -d`
