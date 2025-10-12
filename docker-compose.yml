@@ -1,15 +1,105 @@
+version: '3.8'
+
 services:
-  mongo:
+  # MongoDB para Users y Events
+  mongodb:
     image: mongo:7.0
-    container_name: mongo
+    container_name: eventflow-mongodb
     ports:
       - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin123
     volumes:
-      - ./data/mongo:/data/db
-      - ./mongo-init:/docker-entrypoint-initdb.d
+      - mongodb_data:/data/db
+    networks:
+      - eventflow-network
 
+  # Redis para caché y gestión de inventario
   redis:
-    image: redis:8.2
-    container_name: redis
+    image: redis:7.2-alpine
+    container_name: eventflow-redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - eventflow-network
+
+  # Servicio de Usuarios
+  users-service:
+    build:
+      context: ./users-service
+      dockerfile: Dockerfile
+    container_name: eventflow-users
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      MONGODB_URI: mongodb://admin:admin123@mongodb:27017/eventflow_users?authSource=admin
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: development
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - eventflow-network
+    volumes:
+      - ./users-service:/app
+      - /app/node_modules
+
+  # Servicio de Eventos
+  events-service:
+    build:
+      context: ./events-service
+      dockerfile: Dockerfile
+    container_name: eventflow-events
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      MONGODB_URI: mongodb://admin:admin123@mongodb:27017/eventflow_events?authSource=admin
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: development
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - eventflow-network
+    volumes:
+      - ./events-service:/app
+      - /app/node_modules
+
+  # Servicio de Reservas y Pagos (Orquestador SAGA)
+  reservations-service:
+    build:
+      context: ./reservations-service
+      dockerfile: Dockerfile
+    container_name: eventflow-reservations
+    ports:
+      - "3003:3003"
+    environment:
+      PORT: 3003
+      MONGODB_URI: mongodb://admin:admin123@mongodb:27017/eventflow_reservations?authSource=admin
+      REDIS_URL: redis://redis:6379
+      USERS_SERVICE_URL: http://users-service:3001
+      EVENTS_SERVICE_URL: http://events-service:3002
+      NODE_ENV: development
+    depends_on:
+      - mongodb
+      - redis
+      - users-service
+      - events-service
+    networks:
+      - eventflow-network
+    volumes:
+      - ./reservations-service:/app
+      - /app/node_modules
+
+networks:
+  eventflow-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  redis_data:
