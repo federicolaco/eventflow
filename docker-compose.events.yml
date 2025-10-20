@@ -1,0 +1,55 @@
+# Docker Compose para desarrollo independiente del Events Service
+# Uso: docker-compose -f docker-compose.events.yml up
+
+version: '3.8'
+
+services:
+  mongodb-events:
+    image: mongo:7
+    container_name: eventflow-mongodb-events
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_DATABASE: events_db
+    volumes:
+      - mongodb-events-data:/data/db
+    networks:
+      - eventflow-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: eventflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - eventflow-network
+
+  events-service:
+    build:
+      context: ./events-service
+      dockerfile: Dockerfile
+    container_name: eventflow-events-service
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - MONGODB_URI=mongodb://mongodb-events:27017/events_db
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - mongodb-events
+      - redis
+    networks:
+      - eventflow-network
+    volumes:
+      - ./events-service:/app
+      - /app/node_modules
+
+volumes:
+  mongodb-events-data:
+  redis-data:
+
+networks:
+  eventflow-network:
+    driver: bridge
