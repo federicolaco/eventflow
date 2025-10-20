@@ -1,0 +1,59 @@
+# Docker Compose para desarrollo independiente del Reservations Service
+# Uso: docker-compose -f docker-compose.reservations.yml up
+
+version: '3.8'
+
+services:
+  mongodb-reservations:
+    image: mongo:7
+    container_name: eventflow-mongodb-reservations
+    ports:
+      - "27019:27017"
+    environment:
+      MONGO_INITDB_DATABASE: reservations_db
+    volumes:
+      - mongodb-reservations-data:/data/db
+    networks:
+      - eventflow-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: eventflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - eventflow-network
+
+  reservations-service:
+    build:
+      context: ./reservations-service
+      dockerfile: Dockerfile
+    container_name: eventflow-reservations-service
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - MONGODB_URI=mongodb://mongodb-reservations:27017/reservations_db
+      - REDIS_URL=redis://redis:6379
+      - USERS_SERVICE_URL=http://host.docker.internal:3001
+      - EVENTS_SERVICE_URL=http://host.docker.internal:3002
+    depends_on:
+      - mongodb-reservations
+      - redis
+    networks:
+      - eventflow-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./reservations-service:/app
+      - /app/node_modules
+
+volumes:
+  mongodb-reservations-data:
+  redis-data:
+
+networks:
+  eventflow-network:
+    driver: bridge
