@@ -13,14 +13,13 @@ La separación en microservicios permite escalar cada componente de forma indepe
 
 ### Lenguaje y Framework
 
-**Decisión:** Utilizar **Python con FastAPI** para el desarrollo de los microservicios.
+**Decisión:** Utilizar **Node.js con Express** para el desarrollo de los microservicios.
 
 **Justificación:**
 
-- FastAPI es un framework moderno, rápido y asincrónico, ideal para construir APIs RESTful con alto rendimiento.
-- Su sintaxis es clara y declarativa, lo que reduce el tiempo de desarrollo.
-- Proporciona documentación automática (Swagger UI) sin configuración adicional.
-- Facilita la integración con bibliotecas de validación, autenticación y serialización de datos.
+- Node.js es un entorno rápido, ligero y orientado a eventos, ideal para manejar múltiples solicitudes concurrentes.
+- Express permite construir APIs REST de manera simple y clara.
+- Mantener todos los microservicios en Node.js asegura consistencia y facilita la integración con MongoDB y Redis.
 
 ---
 
@@ -52,7 +51,7 @@ La separación en microservicios permite escalar cada componente de forma indepe
 **Justificación:**
 
 - Docker garantiza que cada microservicio se ejecute en un entorno aislado y reproducible.
-- Docker Compose simplifica la definición de dependencias entre servicios (FastAPI, MongoDB, Redis) y permite levantar todo el sistema con un solo comando.
+- Docker Compose simplifica la definición de dependencias entre servicios (Node.js, MongoDB, Redis) y permite levantar todo el sistema con un solo comando.
 - Facilita la portabilidad del proyecto entre equipos y entornos (desarrollo, pruebas, producción).
 
 ---
@@ -64,6 +63,22 @@ La separación en microservicios permite escalar cada componente de forma indepe
 - Docker en ejecución
 - Comenzar parado en la base del proyecto
 
-En la base del proyecto, ejecutar en la consola
+En la base del proyecto, ejecutar el siguiente comando para iniciar la aplicación:
 
-`docker compose up -d`
+`bash start.sh`
+
+## Post-instalación
+
+**Iniciar contenedores y servicios**
+
+    Levantar MongoDB, Redis y los microservicios ejecutando el archivo ./start.sh
+
+    (Se puede iniciar por separado usando start-xxxx.sh, siendo x el nombre del servicio, ej users)
+
+**Estado**
+
+    Se puede ver el estado de los servicios corriendo status.sh
+
+**Detener**
+
+    Para detener ejecutar el archivo stop.sh

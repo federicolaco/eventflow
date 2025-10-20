@@ -1,0 +1,57 @@
+# Docker Compose para desarrollo independiente del Users Service
+# Uso: docker-compose -f docker-compose.users.yml up
+
+version: '3.8'
+
+services:
+  mongodb-users:
+    image: mongo:7
+    container_name: eventflow-mongodb-users
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: users_db
+    volumes:
+      - mongodb-users-data:/data/db
+    networks:
+      - eventflow-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: eventflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - eventflow-network
+
+  users-service:
+    build:
+      context: ./users-service
+      dockerfile: Dockerfile
+    container_name: eventflow-users-service
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - MONGODB_URI=mongodb://mongodb-users:27017/users_db
+      - REDIS_URL=redis://redis:6379
+      - ENCRYPTION_KEY=my-secret-encryption-key-32-chars-long
+      - ENABLE_ENCRYPTION=false
+    depends_on:
+      - mongodb-users
+      - redis
+    networks:
+      - eventflow-network
+    volumes:
+      - ./users-service:/app
+      - /app/node_modules
+
+volumes:
+  mongodb-users-data:
+  redis-data:
+
+networks:
+  eventflow-network:
+    driver: bridge
