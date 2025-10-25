@@ -20,7 +20,7 @@ BASE_URL_EVENTS="http://localhost:3002"
 BASE_URL_RESERVATIONS="http://localhost:3003"
 
 echo "1️⃣  Creando usuario de prueba..."
-USER_RESPONSE=$(curl -s -X POST "$BASE_URL_USERS/api/usuarios" \
+USER_RESPONSE=$(curl -s -X POST "$BASE_URL_USERS/api/users" \
   -H "Content-Type: application/json" \
   -d '{
     "tipo_documento": "DNI",
@@ -92,7 +92,7 @@ echo "   Estado: $RESERVATION_STATUS"
 echo ""
 
 echo "5️⃣  Verificando historial del usuario..."
-USER_HISTORY=$(curl -s "$BASE_URL_USERS/api/usuarios/$USER_ID")
+USER_HISTORY=$(curl -s "$BASE_URL_USERS/api/users/$USER_ID")
 echo "   Usuario actualizado con historial de compras"
 echo ""
 

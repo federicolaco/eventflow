@@ -23,7 +23,7 @@ docker-compose up -d reservations-service
 echo "✅ Reservations Service iniciado"
 echo ""
 echo "📍 Endpoints disponibles:"
-echo "   - http://localhost:3003/api/reservations"
+echo "   - http://localhost:3003/api/reservar"
 echo ""
 echo "📊 Ver logs:"
 echo "   docker-compose logs -f reservations-service"

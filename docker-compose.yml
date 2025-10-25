@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # MongoDB para Users y Events
   mongodb:
@@ -95,6 +93,21 @@ services:
     volumes:
       - ./reservations-service:/app
       - /app/node_modules
+
+  # Servicio JMeter para pruebas de carga
+  jmeter:
+    image: egaillardon/jmeter:latest
+    container_name: eventflow-jmeter
+    volumes:
+      - ./jmeter:/jmeter
+      - ./jmeter/results:/results
+    networks:
+      - eventflow-network
+    depends_on:
+      - users-service
+      - events-service
+      - reservations-service
+    entrypoint: ["tail", "-f", "/dev/null"]
 
 networks:
   eventflow-network:
