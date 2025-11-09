@@ -87,7 +87,7 @@ Escritura con alta consistencia, priorizando corrección sobre velocidad. La ven
 
 **Decisión:** Orquestación centralizada en Reservations Service.
 
-**Justificación:** Visibilidad centralizada del flujo completo, debugging sencillo con logs centralizados, compensación simple en un solo lugar, menor complejidad vs coreografía (no requiere RabbitMQ/Kafka).
+**Justificación:** Visibilidad centralizada del flujo completo, debugging sencillo con logs centralizados, compensación simple en un solo lugar, menor complejidad vs coreografía.
 
 **Pasos de transacción:**
 
@@ -164,7 +164,7 @@ this.nro_documento_hash = crypto
 | `nro_documento`       | Eliminado                                      | Supresión               |
 | `historial_compras`   | `total_compras: 5`, `monto_total_gastado: 750` | Agregación              |
 
-**Justificación:** Utilidad preservada para análisis estadístico, privacidad garantizada (imposible identificar individuos), cumplimiento GDPR/CCPA, irreversibilidad total.
+**Justificación:** Utilidad preservada para análisis estadístico, privacidad garantizada (imposible identificar individuos), irreversibilidad total.
 
 ---
 
@@ -202,7 +202,7 @@ JMeter integrado en docker-compose.yml, no requiere instalación manual.
 
 ### Encriptación de Datos
 
-AES-256-CBC para emails y datos personales en Users Service. Activable con `ENABLE_ENCRYPTION=true` y `ENCRYPTION_KEY`. Protección en reposo, estándar FIPS 140-2. Trade-off: ~10-20ms adicionales en operaciones.
+AES-256-CBC para emails y datos personales en Users Service. Activable con `ENABLE_ENCRYPTION=true` y `ENCRYPTION_KEY`. Protección en reposo. Trade-off: ~10-20ms adicionales en operaciones.
 
 ---
 
@@ -368,7 +368,7 @@ AES-256-CBC para emails y datos personales en Users Service. Activable con `ENAB
 
 **Estrategia:** Supresión (eliminar `nro_documento`), generalización (`email` → `dominio_email`), agregación (`historial_compras` → `total_compras` y `monto_total_gastado`).
 
-**Justificación:** Preserva utilidad para análisis estadístico (comportamiento de compra agregado, estudios de mercado) mientras garantiza privacidad absoluta. Cumple GDPR/CCPA, apropiado para compartir con terceros o análisis público. Irreversible: imposible recuperar datos originales.
+**Justificación:** Preserva utilidad para análisis estadístico (comportamiento de compra agregado, estudios de mercado) mientras garantiza privacidad absoluta. Irreversible: imposible recuperar datos originales.
 
 ---
 
@@ -494,5 +494,3 @@ NODE_ENV: development
 Para producción, cambiar `NODE_ENV: production` y usar claves seguras.
 
 ---
-
-**Autor:** Proyecto Académico - Tarea 2 - 2025
