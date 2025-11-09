@@ -1,374 +1,376 @@
 # EventFlow - Sistema de Microservicios para Gestión de Eventos
 
-Sistema de microservicios para la plataforma ficticia "EventFlow", que gestiona la venta de entradas y organización de eventos mediante una arquitectura distribuida con patrones avanzados.
+**Tarea 2 - 2025:** Diseño de un Sistema de Microservicios
+
+---
 
 ## Comandos de Ejecución
 
-### Iniciar el Sistema Completo
-
 ```bash
-# Dar permisos a los scripts
-chmod +x *.sh
+# Iniciar el sistema completo
+docker-compose up -d
 
-# Iniciar todos los servicios (incluye JMeter)
-./start.sh
+# Ejecutar pruebas con JMeter (Linux/Mac)
+./run-jmeter.sh
+
+# Ejecutar pruebas con JMeter (Windows)
+run-jmeter.bat
+
+# Ver reporte de JMeter
+open jmeter/results/report/index.html  # Mac/Linux
+start jmeter/results/report/index.html # Windows
+
+# Detener el sistema
+docker-compose down
 ```
 
-**Servicios disponibles:**
+**Servicios:**
 
 - Users Service: http://localhost:3001
 - Events Service: http://localhost:3002
 - Reservations Service: http://localhost:3003
-- JMeter: Integrado en Docker
 
-### Otros Comandos
+---
 
-```bash
-./stop.sh         # Detener todos los servicios
-./status.sh       # Ver estado del sistema
-./logs.sh         # Ver logs en tiempo real
-./test.sh         # Ejecutar pruebas automáticas
-./run-jmeter.sh   # Ejecutar pruebas de carga con JMeter
-./clean.sh        # Limpiar datos y contenedores
+## 1. Justificación del Diseño
+
+### Requerimientos de Consistencia y Lectura/Escritura
+
+**Users Service y Events Service: AP (Disponibilidad + Tolerancia a Particiones)**
+
+Lectura con consistencia eventual, priorizando disponibilidad y velocidad mediante caché Redis con TTL de 2-5 minutos. La consulta de usuarios y eventos es más frecuente que su modificación (ratio 100:1). Ver datos desactualizados de hace 2-5 minutos es aceptable para la experiencia del usuario, permitiendo alta disponibilidad y reduciendo latencia de ~50ms a <5ms.
+
+**Implementación:** Caché Redis con invalidación inmediata en escrituras. Escrituras van a MongoDB primero, luego invalidan caché.
+
+**Reservations Service: CP (Consistencia + Tolerancia a Particiones)**
+
+Escritura con alta consistencia, priorizando corrección sobre velocidad. La venta de entradas requiere consistencia estricta para evitar sobreventa. Sin caché para operaciones de reserva, operaciones atómicas en Redis (`DECR`), y patrón SAGA con compensación para mantener consistencia entre servicios.
+
+**Implementación:** Control de inventario atómico en Redis, SAGA para transacciones distribuidas.
+
+---
+
+### Modelado de Datos NoSQL
+
+**MongoDB** como base de datos principal por su flexibilidad de esquema (eventos con atributos variables) y alto rendimiento en lecturas.
+
+**Bases de datos:**
+
+- `eventflow_users` - Usuarios con historial embebido
+- `eventflow_events` - Eventos con categorías flexibles
+- `eventflow_reservations` - Reservas con referencias
+
+**Patrón de datos embebido** para historial de compras en usuarios:
+
+```javascript
+{
+  _id: ObjectId("..."),
+  nombre: "Juan",
+  historial_compras: [  // Embebido
+    {
+      evento_id: ObjectId("..."),
+      evento_nombre: "Concierto Rock",
+      cantidad: 2,
+      monto_total: 100
+    }
+  ]
+}
 ```
 
-## Estructura de Directorios
+**Justificación:** Las compras siempre se consultan junto con el usuario. Evita joins costosos y mejora rendimiento en lecturas. Trade-off aceptado: duplicación de datos (`evento_nombre`).
 
-```
-eventflow-microservices/
-├── users-service/              # Microservicio de Usuarios
-│   ├── src/
-│   │   ├── models/User.js     # Modelo con seudonimización y encriptación
-│   │   ├── routes/userRoutes.js
-│   │   └── utils/             # Utilidades de privacidad
-│   └── Dockerfile
-│
-├── events-service/             # Microservicio de Eventos
-│   ├── src/
-│   │   ├── models/Event.js
-│   │   └── routes/eventRoutes.js
-│   └── Dockerfile
-│
-├── reservations-service/       # Microservicio de Reservas y Pagos
-│   ├── src/
-│   │   ├── saga/SagaOrchestrator.js      # Patrón SAGA
-│   │   ├── chain/ReservationHandler.js   # Chain of Responsibility
-│   │   └── routes/reservationRoutes.js
-│   └── Dockerfile
-│
-├── jmeter/                     # Pruebas de carga con JMeter
-│   ├── EventFlow-Test-Plan.jmx
-│   └── README.md
-│
-├── docker-compose.yml          # Configuración completa del sistema
-└── README.md                   # Este archivo
-```
+**Redis** para caché (100x más rápido que MongoDB) y operaciones atómicas (`INCR`, `DECR`) para inventario sin race conditions.
 
-## Justificación del Diseño
+---
 
-### 1. Decisiones de Consistencia (Teorema CAP)
+### Patrón SAGA con Orquestación
 
-#### Users Service y Events Service: AP (Disponibilidad + Tolerancia a Particiones)
+**Decisión:** Orquestación centralizada en Reservations Service.
 
-**Justificación:** La consulta de usuarios y eventos es más frecuente que su modificación. Ver datos de hace 2-5 minutos es aceptable para mejorar la disponibilidad y reducir latencia.
+**Justificación:** Visibilidad centralizada del flujo completo, debugging sencillo con logs centralizados, compensación simple en un solo lugar, menor complejidad vs coreografía (no requiere RabbitMQ/Kafka).
 
-**Implementación:**
+**Pasos de transacción:**
 
-- Caché Redis con TTL de 2-5 minutos
-- Invalidación de caché en escrituras
-- Lecturas pueden servirse desde caché aunque MongoDB esté temporalmente no disponible
+1. Validar Usuario (Users Service)
+2. Validar Evento (Events Service)
+3. Reservar Inventario (Redis `DECR` atómico)
+4. Procesar Pago (simulado)
+5. Actualizar Historial Usuario
+6. Confirmar Reserva (estado CONFIRMED)
 
-#### Reservations Service: CP (Consistencia + Tolerancia a Particiones)
-
-**Justificación:** La venta de entradas requiere consistencia estricta para evitar sobreventa. Es inaceptable vender más entradas que el aforo disponible.
-
-**Implementación:**
-
-- Sin caché para operaciones de reserva
-- Operaciones atómicas en Redis para control de inventario
-- SAGA con compensación para mantener consistencia entre servicios
-
-### 2. Modelado de Datos NoSQL
-
-#### MongoDB como Base de Datos Principal
-
-**Justificación:**
-
-- Flexibilidad de esquema para eventos con atributos variables
-- Documentos embebidos reducen joins (historial de compras en usuarios)
-- Escalabilidad horizontal mediante sharding
-- Alto rendimiento en lecturas (caso de uso principal)
-
-#### Patrón de Datos Embebido
-
-**Decisión:** El historial de compras se embebe en el documento de usuario.
-
-**Justificación:**
-
-- Las compras siempre se consultan junto con el usuario
-- Evita joins costosos entre colecciones
-- Mejor rendimiento en lecturas frecuentes
-- Trade-off aceptado: Duplicación de datos (evento_id, monto)
-
-#### Redis como Caché y Control de Concurrencia
-
-**Justificación:**
-
-- 100x más rápido que MongoDB para lecturas
-- Operaciones atómicas (INCR/DECR) para inventario sin race conditions
-- TTL automático para expiración de caché
-- Pub/Sub preparado para eventos en tiempo real (extensión futura)
-
-### 3. Patrón SAGA con Orquestación
+**Compensaciones:** Si falla paso 3+, revertir inventario con Redis `INCR` y marcar reserva como FAILED. Idempotente.
 
 **Ubicación:** `reservations-service/src/saga/SagaOrchestrator.js`
 
-**Justificación de Orquestación vs Coreografía:**
+---
 
-- Visibilidad centralizada del flujo completo de la transacción
-- Debugging más sencillo (un solo lugar para rastrear errores)
-- Compensación centralizada (lógica de rollback en un solo lugar)
-- Menor complejidad que eventos distribuidos
+### Patrón Chain of Responsibility
 
-**Flujo de Transacción:**
+**Justificación:** Validaciones secuenciales antes de iniciar SAGA. Fail-fast para detectar errores antes de transacciones distribuidas costosas.
 
-```
-1. Validar Usuario → 2. Validar Evento → 3. Reservar Inventario →
-4. Procesar Pago → 5. Actualizar Historial → 6. Confirmar Reserva
-```
+**Cadena de manejadores:**
 
-**Transacciones de Compensación:**
+1. **ValidadorDeDatos** - Verifica campos requeridos y tipos
+2. **ValidadorDeInventario** - Consulta Redis, verifica disponibilidad
+3. **CalculadorDePrecio** - Calcula `monto_total = precio × cantidad`
+4. **ValidadorDeLimiteDeCompra** - Verifica límite máximo (10 entradas)
+5. **CreadorDeReserva** - Crea documento en estado PENDING
 
-- Si falla después de reservar inventario: Revertir inventario
-- Si falla el pago: Revertir inventario y marcar reserva como fallida
-- Todas las compensaciones se ejecutan en orden inverso
-
-### 4. Patrón Chain of Responsibility
+**Beneficio:** Cada manejador valida un aspecto específico. Si falta el campo `cantidad`, se rechaza antes de llamar a Users Service, Events Service y Redis.
 
 **Ubicación:** `reservations-service/src/chain/ReservationHandler.js`
 
-**Justificación:**
+---
 
-- Fail-fast: Detectar errores antes de iniciar transacciones distribuidas costosas
-- Separación de responsabilidades: Validaciones separadas de la lógica de negocio
-- Extensibilidad: Fácil agregar nuevas validaciones sin modificar SAGA
-- Performance: Evita llamadas HTTP innecesarias si los datos son inválidos
+### Event Sourcing y CQRS (Concepto)
 
-**Cadena de Manejadores:**
+**Event Sourcing:** Almacenar eventos inmutables en lugar de estados. Cada cambio se registra como evento.
 
-1. ValidadorDeDatos: Verifica campos requeridos y tipos
-2. ValidadorDeInventario: Verifica disponibilidad de entradas
-3. CalculadorDePrecio: Calcula precio total según cantidad
-4. ValidadorDeLimiteDeCompra: Verifica límite máximo por usuario
-5. CreadorDeReserva: Crea documento de reserva en estado PENDING
+**CQRS:** Separar operaciones de lectura (queries) de escritura (commands).
 
-## Diagrama de Arquitectura
+**Aplicación a EventFlow:** MongoDB con eventos + Redis con vistas materializadas sincronizadas.
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Users Service  │     │ Events Service  │     │ Reservations    │
-│   (Port 3001)   │     │   (Port 3002)   │     │   Service       │
-│                 │     │                 │     │   (Port 3003)   │
-│  - MongoDB      │     │  - MongoDB      │     │  - MongoDB      │
-│  - Redis Cache  │     │  - Redis Cache  │     │  - SAGA Orch.   │
-│  - Privacidad   │     │  - Inventario   │     │  - Chain of R.  │
-└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │                       │                       │
-         └───────────────────────┴───────────────────────┘
-                                 │
-                    ┌────────────┴────────────┐
-                    │                         │
-              ┌─────▼─────┐           ┌──────▼──────┐
-              │  MongoDB  │           │    Redis    │
-              │  (3 DBs)  │           │   (Cache)   │
-              └───────────┘           └─────────────┘
+**Cuándo sería beneficioso:** Alto volumen de lecturas (>100:1), auditoría completa de transacciones, análisis histórico de ventas, requisitos regulatorios estrictos.
+
+**No implementado:** La solución actual (caché simple) es suficiente. Event Sourcing + CQRS agregaría complejidad sin beneficios proporcionales para este caso de uso.
+
+---
+
+### Patrones de Privacidad de Datos
+
+**Seudonimización:** Hash SHA-256 unidireccional del número de documento en `User.js`. Irreversible, consistente (mismo documento = mismo hash), protección si la base de datos es comprometida.
+
+```javascript
+this.nro_documento_hash = crypto
+  .createHash("sha256")
+  .update(this.nro_documento)
+  .digest("hex");
 ```
 
-## Diagrama de Flujo del Patrón SAGA
+**Encriptación AES-256:** Activable con `ENABLE_ENCRYPTION=true`. Reversible con clave, protección en reposo para emails y datos personales. Trade-off: +10-20ms de latencia.
 
-```
-[Cliente] → POST /api/reservar
-                    │
-                    ▼
-         ┌──────────────────────┐
-         │  Chain of            │
-         │  Responsibility      │ ← Validaciones previas
-         └──────────┬───────────┘
-                    │
-                    ▼
-         ┌──────────────────────┐
-         │  SAGA Orchestrator   │
-         │  Inicia Transacción  │
-         └──────────┬───────────┘
-                    │
-    ┌───────────────┴───────────────┐
-    │                               │
-    ▼                               ▼
-┌────────────┐                 ┌────────────┐
-│  Paso 1:   │    SUCCESS      │  Paso 2:   │
-│  Validar   │ ──────────────> │  Validar   │
-│  Usuario   │                 │  Evento    │
-└────────────┘                 └──────┬─────┘
-                                      │
-                                      ▼
-                               ┌────────────┐
-                               │  Paso 3:   │
-                               │  Reservar  │
-                               │  Inventario│
-                               └──────┬─────┘
-                                      │
-                    ┌─────────────────┴─────────────────┐
-                    │                                   │
-                    ▼ SUCCESS                           ▼ ERROR
-             ┌────────────┐                      ┌────────────┐
-             │  Paso 4:   │                      │ Compensar: │
-             │  Procesar  │                      │ Revertir   │
-             │  Pago      │                      │ Inventario │
-             └──────┬─────┘                      └──────┬─────┘
-                    │                                   │
-                    ▼ SUCCESS                           ▼
-             ┌────────────┐                      ┌────────────┐
-             │  Paso 5:   │                      │  Marcar    │
-             │  Actualizar│                      │  Reserva   │
-             │  Historial │                      │  Fallida   │
-             └──────┬─────┘                      └────────────┘
-                    │
-                    ▼
-             ┌────────────┐
-             │  Paso 6:   │
-             │  Confirmar │
-             │  Reserva   │
-             └──────┬─────┘
-                    │
-                    ▼
-            [Reserva Exitosa]
-```
+---
 
-## Diagrama del Patrón Chain of Responsibility
-
-```
-[Request] → {usuario_id, evento_id, cantidad}
-                    │
-                    ▼
-         ┌──────────────────────┐
-         │  Handler 1:          │
-         │  ValidadorDeDatos    │ ← Verifica campos requeridos
-         └──────────┬───────────┘
-                    │ ✓ Datos válidos
-                    ▼
-         ┌──────────────────────┐
-         │  Handler 2:          │
-         │  ValidadorDeInventario│ ← Verifica disponibilidad
-         └──────────┬───────────┘
-                    │ ✓ Hay stock
-                    ▼
-         ┌──────────────────────┐
-         │  Handler 3:          │
-         │  CalculadorDePrecio  │ ← Calcula precio total
-         └──────────┬───────────┘
-                    │ ✓ Precio calculado
-                    ▼
-         ┌──────────────────────┐
-         │  Handler 4:          │
-         │  ValidadorDeLimite   │ ← Verifica límite máximo
-         │  DeCompra            │
-         └──────────┬───────────┘
-                    │ ✓ Dentro del límite
-                    ▼
-         ┌──────────────────────┐
-         │  Handler 5:          │
-         │  CreadorDeReserva    │ ← Crea reserva PENDING
-         └──────────┬───────────┘
-                    │ ✓ Reserva creada
-                    ▼
-         ┌──────────────────────┐
-         │  Iniciar SAGA        │
-         └──────────────────────┘
-```
-
-## Justificación del Requisito Adicional: Exportación de Datos Anonimizados
-
-### Estrategia de Anonimización
+### Exportación de Datos Anonimizados
 
 **Endpoint:** `GET /api/users/exportar`
 
-**Técnicas Implementadas:**
+**Estrategia de anonimización:**
 
-#### 1. Seudonimización (Almacenamiento)
+| Campo Original        | Campo Anonimizado                              | Técnica                 |
+| --------------------- | ---------------------------------------------- | ----------------------- |
+| `nombre` + `apellido` | `nombre_anonimizado: "Usuario_XXX"`            | Supresión + ID genérico |
+| `email`               | `dominio_email: "gmail.com"`                   | Generalización          |
+| `nro_documento`       | Eliminado                                      | Supresión               |
+| `historial_compras`   | `total_compras: 5`, `monto_total_gastado: 750` | Agregación              |
 
-**Técnica:** Hash SHA-256 unidireccional del número de documento
+**Justificación:** Utilidad preservada para análisis estadístico, privacidad garantizada (imposible identificar individuos), cumplimiento GDPR/CCPA, irreversibilidad total.
 
-**Justificación:**
+---
 
-- Irreversibilidad: Imposible recuperar el documento original del hash
-- Consistencia: El mismo documento siempre genera el mismo hash (útil para búsquedas)
-- Seguridad: Protección incluso si la base de datos es comprometida
+### Tecnologías de Despliegue
 
-**Implementación:**
+**Docker y Docker Compose:** Portabilidad (funciona en cualquier máquina), aislamiento (cada servicio en su contenedor), reproducibilidad (mismo entorno en desarrollo y producción).
 
-```javascript
-// Pre-save hook en User.js
-userSchema.pre("save", function (next) {
-  if (this.isNew || this.isModified("nro_documento")) {
-    this.nro_documento_hash = crypto
-      .createHash("sha256")
-      .update(this.nro_documento)
-      .digest("hex");
-  }
-  next();
-});
+**Estructura:**
+
+- MongoDB (base de datos NoSQL)
+- Redis (caché y control de concurrencia)
+- users-service (Node.js + Express)
+- events-service (Node.js + Express)
+- reservations-service (Node.js + Express)
+- jmeter (pruebas de carga)
+
+Red Docker compartida para comunicación entre servicios por nombres (ej: `http://users-service:3001`).
+
+---
+
+### Pruebas con JMeter
+
+JMeter integrado en docker-compose.yml, no requiere instalación manual.
+
+**Escenarios:**
+
+1. Carga en escritura de usuarios (50 usuarios concurrentes)
+2. Carga en escritura de eventos (20 eventos concurrentes)
+3. Estrés en lecturas con Redis (100 usuarios × 10 lecturas)
+4. Concurrencia en SAGA (30 reservas simultáneas)
+
+**Métricas validadas:** Throughput (transacciones/segundo), latencia (p50, p90, p95, p99), tasa de error (<1%), consistencia de inventario (sin sobreventa).
+
+---
+
+### Encriptación de Datos
+
+AES-256-CBC para emails y datos personales en Users Service. Activable con `ENABLE_ENCRYPTION=true` y `ENCRYPTION_KEY`. Protección en reposo, estándar FIPS 140-2. Trade-off: ~10-20ms adicionales en operaciones.
+
+---
+
+## 2. Diagrama de Arquitectura
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          CLIENTES / API                              │
+└───────────────────┬─────────────────┬──────────────────┬────────────┘
+                    │                 │                  │
+                    ▼                 ▼                  ▼
+         ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+         │  Users Service   │ │ Events Service   │ │  Reservations    │
+         │   (Port 3001)    │ │   (Port 3002)    │ │    Service       │
+         │                  │ │                  │ │   (Port 3003)    │
+         │  • MongoDB       │ │  • MongoDB       │ │  • MongoDB       │
+         │  • Redis Cache   │ │  • Redis Cache   │ │  • SAGA Orch.    │
+         │  • Privacidad    │ │  • Inventario    │ │  • Chain of R.   │
+         │  • Encriptación  │ │  • TTL 5min      │ │  • Sin Caché     │
+         │  • Anonimización │ │                  │ │                  │
+         └────────┬─────────┘ └────────┬─────────┘ └────────┬─────────┘
+                  │                    │                    │
+                  └────────────────────┴────────────────────┘
+                                       │
+                      ┌────────────────┴────────────────┐
+                      │                                 │
+                ┌─────▼─────────────┐         ┌────────▼──────────┐
+                │     MongoDB       │         │      Redis        │
+                │  (3 Bases de      │         │  (Caché +         │
+                │   Datos)          │         │   Inventario)     │
+                │                   │         │                   │
+                │ • eventflow_users │         │ • TTL automático  │
+                │ • eventflow_events│         │ • Ops atómicas    │
+                │ • eventflow_      │         │   (INCR/DECR)     │
+                │   reservations    │         │                   │
+                └───────────────────┘         └───────────────────┘
 ```
 
-#### 2. Anonimización (Exportación)
+---
 
-**Técnica:** Generalización y supresión de datos
+## 3. Diagrama de Flujo del Patrón SAGA
 
-**Transformaciones aplicadas:**
+```
+[Cliente] → POST /api/reservar
+            { usuario_id, evento_id, cantidad }
+                        │
+                        ▼
+             ┌──────────────────────────┐
+             │  Chain of Responsibility │
+             │  1. ValidadorDeDatos     │
+             │  2. ValidadorInventario  │
+             │  3. CalculadorPrecio     │
+             │  4. ValidadorLimite      │
+             │  5. CreadorReserva       │
+             └────────────┬─────────────┘
+                          │
+                          ▼
+             ┌──────────────────────────┐
+             │   SAGA Orchestrator      │
+             └────────────┬─────────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          │                               │
+          ▼                               ▼
+  ┌──────────────┐              ┌──────────────┐
+  │   Paso 1:    │              │   Paso 2:    │
+  │   Validar    │  ─────────>  │   Validar    │
+  │   Usuario    │   SUCCESS    │   Evento     │
+  └──────────────┘              └──────┬───────┘
+                                       │
+                                       ▼
+                                ┌──────────────┐
+                                │   Paso 3:    │
+                                │   Reservar   │
+                                │   Inventario │
+                                │ (Redis DECR) │
+                                └──────┬───────┘
+                                       │
+                   ┌───────────────────┴───────────────────┐
+                   │ SUCCESS                               │ ERROR
+                   ▼                                       ▼
+            ┌──────────────┐                        ┌──────────────┐
+            │   Paso 4:    │                        │  Compensar:  │
+            │   Procesar   │                        │  Revertir    │
+            │   Pago       │                        │  Inventario  │
+            └──────┬───────┘                        │ (Redis INCR) │
+                   │                                └──────────────┘
+                   ▼
+            ┌──────────────┐
+            │   Paso 5:    │
+            │   Actualizar │
+            │   Historial  │
+            └──────┬───────┘
+                   │
+                   ▼
+            ┌──────────────┐
+            │   Paso 6:    │
+            │   Confirmar  │
+            │   Reserva    │
+            │ (CONFIRMED)  │
+            └──────────────┘
+```
 
-| Campo Original        | Campo Anonimizado                      | Técnica                       |
-| --------------------- | -------------------------------------- | ----------------------------- |
-| `nombre` + `apellido` | `nombre_anonimizado: "Usuario_XXX"`    | Supresión + ID genérico       |
-| `email`               | `dominio_email: "gmail.com"`           | Generalización (solo dominio) |
-| `nro_documento`       | ❌ Eliminado                           | Supresión completa            |
-| `tipo_documento`      | ✓ Mantenido                            | Dato no identificable         |
-| `fecha_registro`      | ✓ Mantenido                            | Útil para análisis temporal   |
-| `historial_compras`   | `total_compras: 5`, `monto_total: 750` | Agregación                    |
+**Compensaciones:** Fallo en Paso 3+ revierte inventario con Redis `INCR` + marca reserva como FAILED. Idempotente.
 
-**Justificación:**
+---
 
-- Utilidad preservada: Los datos siguen siendo útiles para análisis estadístico
-- Privacidad garantizada: Imposible identificar individuos específicos
-- Cumplimiento GDPR: Apropiado para compartir con terceros o análisis público
+## 4. Diagrama del Patrón Chain of Responsibility
 
-**Casos de uso:**
+```
+[Request] → { usuario_id, evento_id, cantidad }
+                        │
+                        ▼
+             ┌──────────────────────────┐
+             │      Handler 1:          │
+             │   ValidadorDeDatos       │
+             │ • Campos requeridos      │
+             │ • Tipos de datos         │
+             └────────────┬─────────────┘
+                          │ ✓
+                          ▼
+             ┌──────────────────────────┐
+             │      Handler 2:          │
+             │  ValidadorDeInventario   │
+             │ • Consulta Redis         │
+             │ • cantidad <= disponible │
+             └────────────┬─────────────┘
+                          │ ✓
+                          ▼
+             ┌──────────────────────────┐
+             │      Handler 3:          │
+             │   CalculadorDePrecio     │
+             │ • monto = precio × cant  │
+             └────────────┬─────────────┘
+                          │ ✓
+                          ▼
+             ┌──────────────────────────┐
+             │      Handler 4:          │
+             │   ValidadorDeLimite      │
+             │ • cantidad <= 10         │
+             └────────────┬─────────────┘
+                          │ ✓
+                          ▼
+             ┌──────────────────────────┐
+             │      Handler 5:          │
+             │   CreadorDeReserva       │
+             │ • Estado: PENDING        │
+             └────────────┬─────────────┘
+                          │ ✓
+                          ▼
+             ┌──────────────────────────┐
+             │    Iniciar SAGA          │
+             └──────────────────────────┘
+```
 
-- Análisis de comportamiento de compra agregado
-- Estudios de mercado sin comprometer privacidad
-- Reportes públicos de estadísticas de eventos
+**Ventaja:** Fail-fast rechaza solicitudes inválidas antes de transacciones costosas. Extensible sin modificar código existente.
 
-#### 3. Encriptación Opcional (AES-256)
+---
 
-**Activación:** Variable de entorno `ENABLE_ENCRYPTION=true`
+## 5. Justificación del Requisito Adicional
 
-**Justificación:**
+**Exportación de Datos Anonimizados** (endpoint `GET /api/users/exportar`)
 
-- Reversibilidad controlada: Permite recuperar el dato original con la clave
-- Protección en reposo: Datos encriptados en la base de datos
-- Gestión de claves: Clave almacenada en variable de entorno (fuera de la DB)
+**Estrategia:** Supresión (eliminar `nro_documento`), generalización (`email` → `dominio_email`), agregación (`historial_compras` → `total_compras` y `monto_total_gastado`).
 
-**Cuándo usar:**
+**Justificación:** Preserva utilidad para análisis estadístico (comportamiento de compra agregado, estudios de mercado) mientras garantiza privacidad absoluta. Cumple GDPR/CCPA, apropiado para compartir con terceros o análisis público. Irreversible: imposible recuperar datos originales.
 
-- Datos altamente sensibles (médicos, financieros)
-- Requisitos regulatorios estrictos (HIPAA, PCI-DSS)
-- Ambientes donde la DB puede ser accedida por personal no autorizado
-
-### Comparación de Técnicas
-
-| Técnica                    | Reversible       | Búsqueda        | Performance | Caso de Uso                 |
-| -------------------------- | ---------------- | --------------- | ----------- | --------------------------- |
-| **Hash (SHA-256)**         | ❌ No            | ✓ Sí (por hash) | ⚡ Rápido   | Almacenamiento seguro       |
-| **Encriptación (AES-256)** | ✓ Sí (con clave) | ❌ No           | 🐌 Lento    | Datos que deben recuperarse |
-| **Anonimización**          | ❌ No            | ❌ No           | ⚡ Rápido   | Exportación/análisis        |
+---
 
 ## API Endpoints
 
@@ -399,125 +401,98 @@ GET /api/users/exportar
 POST /api/events
 {
   "nombre": "Concierto Rock 2025",
-  "descripcion": "Gran concierto de rock",
   "fecha": "2025-12-31T20:00:00Z",
-  "lugar": "Estadio Nacional",
   "aforo_total": 5000,
-  "precio": 50,
-  "categoria": "Concierto"
+  "precio": 50
 }
 
-# Obtener evento
+# Obtener evento (con caché Redis)
 GET /api/events/{evento_id}
 ```
 
 ### Reservations Service (http://localhost:3003)
 
 ```bash
-# Crear reserva (inicia SAGA + Chain of Responsibility)
+# Crear reserva (inicia SAGA + Chain)
 POST /api/reservar
 {
-  "usuario_id": "507f1f77bcf86cd799439011",
-  "evento_id": "507f1f77bcf86cd799439012",
+  "usuario_id": "507f...",
+  "evento_id": "507f...",
   "cantidad": 2
 }
 
-# Obtener estado de reserva
+# Obtener reserva
 GET /api/reservar/{reserva_id}
 ```
 
+---
+
 ## Pruebas con JMeter
 
-JMeter está integrado en Docker Compose. No necesitas descargar nada.
-
-### Ejecutar Pruebas de Carga
-
 ```bash
-# Opción 1: Usar el script automatizado
-chmod +x run-jmeter.sh
-./run-jmeter.sh
+# 1. Levantar sistema
+docker-compose up -d
 
-# Opción 2: Ejecutar manualmente
-docker exec -it eventflow-jmeter jmeter \
-  -n \
-  -t /jmeter/EventFlow-Test-Plan.jmx \
-  -l /results/results.jtl \
-  -e \
-  -o /results/report
+# 2. Ejecutar pruebas
+./run-jmeter.sh      # Linux/Mac
+run-jmeter.bat       # Windows
 
-# Ver reporte HTML
-open jmeter/results/report/index.html
+# 3. Ver reporte HTML
+open jmeter/results/report/index.html  # Mac/Linux
+start jmeter/results/report/index.html # Windows
 ```
 
-### Escenarios de Prueba
+**Escenarios:** Carga de usuarios (50 usuarios), carga de eventos (20 eventos), estrés en lecturas (100×10 loops), concurrencia SAGA (30 reservas).
 
-1. **Crear Usuarios (Carga):** 50 usuarios concurrentes en 10 segundos
-2. **Crear Eventos (Carga):** 20 usuarios concurrentes en 5 segundos
-3. **Consultar Eventos (Estrés):** 100 usuarios × 10 iteraciones en 20 segundos
-4. **Crear Reservas - SAGA (Concurrencia):** 30 usuarios concurrentes en 5 segundos
+**Métricas esperadas:**
 
-### Métricas Esperadas
+- Lectura de eventos (Redis): <50ms, >500 req/s
+- Escritura de usuarios: 100-200ms
+- Reservas SAGA: 200-500ms
 
-- **Lectura de Eventos (con Redis):** Latencia < 50ms, Throughput > 500 req/s
-- **Escritura de Reservas (SAGA):** Latencia 200-500ms, Throughput 50-100 req/s
-- **Tasa de error:** < 1% en condiciones normales
+**Validar consistencia:**
 
-Ver documentación completa en `jmeter/README.md`
+```bash
+docker exec -it eventflow-mongodb mongosh eventflow_events \
+  --eval "db.events.find({}, {entradas_disponibles: 1})"
+```
+
+Verificar: `entradas_disponibles` nunca negativo y `<= aforo_total`.
+
+---
 
 ## Tecnologías Utilizadas
 
-- **Node.js** - Runtime de JavaScript
-- **Express** - Framework web
-- **MongoDB** - Base de datos NoSQL
-- **Redis** - Caché y control de concurrencia
-- **Mongoose** - ODM para MongoDB
-- **Docker & Docker Compose** - Contenedorización
-- **JMeter** - Pruebas de carga y rendimiento
+| Tecnología | Versión | Propósito            |
+| ---------- | ------- | -------------------- |
+| Node.js    | 20 LTS  | Runtime de servicios |
+| Express    | 4.18    | Framework web        |
+| MongoDB    | 7.0     | Base de datos NoSQL  |
+| Redis      | 7.2     | Caché y concurrencia |
+| Docker     | Latest  | Contenedorización    |
+| JMeter     | 5.6     | Pruebas de carga     |
 
-## Concepto: Event Sourcing y CQRS
+---
 
-### Event Sourcing
+## Variables de Entorno
 
-**Concepto:** Almacenar eventos en lugar de estados. Cada cambio en el sistema se registra como un evento inmutable.
+**Configuración en docker-compose.yml:**
 
-**Ejemplo para EventFlow:**
-En lugar de actualizar el campo `entradas_disponibles` directamente:
+```yaml
+# Users Service
+NODE_ENV: development
+ENABLE_ENCRYPTION: true  # Encriptación AES-256
+ENCRYPTION_KEY: my-secret-encryption-key-change-in-production
 
-```javascript
-// Enfoque tradicional (actual)
-{ evento_id: "123", entradas_disponibles: 95 }
+# Events Service
+NODE_ENV: development
 
-// Event Sourcing
-[
-  { tipo: "EventoCreado", aforo_total: 100, timestamp: "..." },
-  { tipo: "EntradasReservadas", cantidad: 3, timestamp: "..." },
-  { tipo: "EntradasReservadas", cantidad: 2, timestamp: "..." }
-]
-// Estado actual = 100 - 3 - 2 = 95
+# Reservations Service
+NODE_ENV: development
 ```
 
-**Beneficios:**
+Para producción, cambiar `NODE_ENV: production` y usar claves seguras.
 
-- Auditoría completa: Historial completo de cambios
-- Debugging: Reproducir el estado en cualquier momento
-- Análisis temporal: Entender cómo evolucionó el sistema
+---
 
-### CQRS (Command Query Responsibility Segregation)
-
-**Concepto:** Separar las operaciones de lectura (queries) de las de escritura (commands).
-
-**Aplicación a EventFlow:**
-
-- **Escritura:** MongoDB con Event Sourcing para reservas
-- **Lectura:** Vista materializada en Redis optimizada para consultas
-
-**Cuándo sería beneficioso:**
-
-- Alto volumen de lecturas vs escrituras (10:1 o más)
-- Necesidad de auditoría completa de transacciones
-- Análisis histórico de ventas y tendencias
-
-**Diferencia con la solución actual:**
-
-- Actual: MongoDB + Redis (caché simple)
-- Con CQRS: MongoDB (eventos) + Redis (vistas materializadas sincronizadas)
+**Autor:** Proyecto Académico - Tarea 2 - 2025
